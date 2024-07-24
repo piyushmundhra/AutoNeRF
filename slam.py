@@ -8,9 +8,11 @@ from depth_anything_v2 import dpt
 from SuperGlue.models.matching import Matching
 from dataclasses import dataclass
 import numpy as np
-import plotly
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
+import plotly 
+
+plotly.offline.init_notebook_mode(connected=True)
 
 def get_models():
     """
@@ -234,6 +236,16 @@ def get_matches(inputs: list[np.ndarray], model: Matching, num_matches: int = 30
     return matches
 
 def project_matches_to_3d(matches, depths):
+    """
+    Projects 2D matches to 3D coordinates using depth information.
+
+    Args:
+        matches (list of tuples): A list of tuples where each tuple contains two sets of points and a match score.
+        depths (list of float): A list of depth values corresponding to each match.
+
+    Returns:
+        list of tuples: A list of tuples where each tuple contains two sets of 3D points.
+    """
     matches_3d = []
     for i, (pts0, pts1, _) in enumerate(matches):
         pts0_3d = np.array([project_point(a,b, depths[i]) for a,b in pts0])
@@ -241,16 +253,17 @@ def project_matches_to_3d(matches, depths):
         matches_3d.append((pts0_3d, pts1_3d))
     return matches_3d
 
-def depth_to_pcd(depth: torch.Tensor, image: np.ndarray):
-    pcd = []
-    colors = []
-    for _y in range(0,518,2):
-        for _x in range(0,518,2):
-            pcd.append(np.array(project_point(_x,_y, depth)))
-            colors.append(image[_y][_x])
-    return np.array(pcd), np.array(colors)
-
 def get_transform(_pts0, _pts1):
+    """
+    Computes the rotation matrix and translation vector that aligns two sets of 3D points.
+
+    Args:
+        _pts0 (numpy.ndarray): The first set of 3D points.
+        _pts1 (numpy.ndarray): The second set of 3D points.
+
+    Returns:
+        tuple: A tuple containing the rotation matrix (numpy.ndarray) and the translation vector (numpy.ndarray).
+    """
     centroid0 = np.mean(_pts0, axis=0)
     centroid1 = np.mean(_pts1, axis=0)
     
@@ -269,6 +282,15 @@ def get_transform(_pts0, _pts1):
     return R, t
 
 def decompose_rotation_matrix(R):
+    """
+    Decomposes a rotation matrix into Euler angles (in degrees).
+
+    Args:
+        R (numpy.ndarray): A 3x3 rotation matrix.
+
+    Returns:
+        numpy.ndarray: A 1D array containing the Euler angles (in degrees) corresponding to the rotation matrix.
+    """
     sy = np.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
     singular = sy < 1e-6
 
@@ -286,13 +308,10 @@ def decompose_rotation_matrix(R):
         np.degrees(z)  # azimuth
         ])
 
-def apply_transform(points, R, t):
-    transformed_points = []
-    for point in points:
-        rotated_point = np.dot(R, np.array(point))
-        transformed_point = rotated_point + t
-        transformed_points.append(transformed_point)
-    return transformed_points
+# -----------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------
+# -----------------------------------------------------------------------------------------
+# ------------------------------------- VISUALIZATION -------------------------------------
 
 def create_trace(matches, colors, opacity=0.8):
     x = [point[0] for point in matches]
@@ -315,6 +334,15 @@ def create_trace(matches, colors, opacity=0.8):
             'color': marker_color
         }
     )
+
+def depth_to_pcd(depth: torch.Tensor, image: np.ndarray):
+    pcd = []
+    colors = []
+    for _y in range(0,518,2):
+        for _x in range(0,518,2):
+            pcd.append(np.array(project_point(_x,_y, depth)))
+            colors.append(image[_y][_x])
+    return np.array(pcd), np.array(colors)
 
 def create_pcd_trace(depth, image):
     points, colors = depth_to_pcd(depth, image)
