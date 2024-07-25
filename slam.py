@@ -90,6 +90,23 @@ def get_rays(N=518, camera_params=iPhone15ProMainCamera()):
     rays = [ray / np.linalg.norm(ray) for ray in rays]
     return np.array(rays)
 
+def get_colors(img, N=518):
+    """
+    Extracts the RGB color values from an image and flattens them into a 2D array.
+
+    This function reads the RGB color values from an image and flattens them into
+    a 2D array of shape (N^2, 3), where each row represents an RGB color value. 
+    Each value will map 1-1 to the corresponding ray vector in the ray grid.
+
+    Parameters:
+    - img (np.ndarray): The input image.
+    - N (int): The resolution of the image. Defaults to 518.
+
+    Returns:
+    - np.ndarray: A 2D array of shape (N^2, 3) containing RGB color values.
+    """
+    return np.array([img[y][x] for y in range(N) for x in range(N)])
+
 def rays_to_angles(rays):
     """
     Converts a set of ray vectors into a 2xN^2 numpy array containing azimuth and elevation angles.
@@ -130,6 +147,7 @@ def img(path: str):
 def get_images(prefix: str):
     """
     Retrieves and processes all images with the given prefix from the './Images/' directory.
+    All images are converted to RGB, and resized to 518x518.
 
     Args:
         prefix (str): The prefix of the image filenames.
@@ -221,7 +239,7 @@ def project_point(_x, _y, depth, N=518, camera_params=iPhone15ProMainCamera()):
     y = -((_y - C) * z / f)
     return x,y,z 
 
-def get_depth(image: np.ndarray, model: torch.torch.torch.nn.Module):
+def get_depth(image: np.ndarray, model: torch.nn.Module):
     input_image = torch.from_numpy(image).unsqueeze(0).to(torch.float32).to(torch.device("cpu"))
     with torch.no_grad():
         depth = model.forward(input_image).squeeze()
@@ -273,12 +291,12 @@ def get_transform(_pts0, _pts1):
 
     U, S, Vt = np.linalg.svd(H)
 
-    R = np.dot(Vt.T, U.T)
+    R : np.ndarray = np.dot(Vt.T, U.T)
     if np.linalg.det(R) < 0:
         Vt[2, :] *= -1
         R = np.dot(Vt.T, U.T)
 
-    t = np.dot(centroid0, R.T) - centroid1
+    t : np.ndarray = np.dot(centroid0, R.T) - centroid1
     return R, t
 
 def decompose_rotation_matrix(R):
@@ -308,11 +326,43 @@ def decompose_rotation_matrix(R):
         np.degrees(z)  # azimuth
         ])
 
+def compute_positions(transforms: list[tuple[np.ndarray, np.ndarray]]):
+    positions = [np.array([0,0,0])]
+    for t in transforms:
+        positions.append(positions[-1] + t[1])
+    return np.array(positions)
+
+def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
+    ray_direction_vectors = [get_rays()]
+    for t in transforms:
+        ray_direction_vectors.append(np.dot(ray_direction_vectors[-1], t[0].T))
+    return np.array(ray_direction_vectors)
+
+def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: Matching):
+    images = get_images(image_prefix)
+    match_inputs = [preprocess_image_matcher(x) for x in images]
+    depth_inputs = [preprocess_image_depth(x) for x in images]
+    depths = [get_depth(image=x, model=model) for x in depth_inputs]
+    matches = get_matches(inputs=match_inputs, model=matching, num_matches=-1)
+    matches_3d = project_matches_to_3d(matches, depths)
+    transforms = [get_transform(m[0], m[1]) for m in matches_3d]
+    positions = compute_positions(transforms)
+    ray_direction_vectors = compute_ray_directions(transforms)
+    colors = np.array([get_colors(x) for x in images])
+
+    num_images, resolution, _ = colors.shape
+    colors = colors.reshape(num_images * resolution, 3)
+    ray_direction_vectors = ray_direction_vectors.reshape(num_images * resolution, 3)
+    positions = np.repeat(positions, resolution, axis=0)
+
+    return np.concatenate((colors, ray_direction_vectors, positions), axis=1)
+
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
 # ------------------------------------- VISUALIZATION -------------------------------------
 
+            
 def create_trace(matches, colors, opacity=0.8):
     x = [point[0] for point in matches]
     y = [point[1] for point in matches]

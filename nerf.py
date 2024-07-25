@@ -1,22 +1,26 @@
 import torch
+from PIL import Image
+import numpy as np
+from tqdm import tqdm
 
 class NGP(torch.nn.Module):
-    def __init__(self, T, Nl, L, device, aabb_scale, F=2):
+    def __init__(self, T, Nl, L, aabb_scale, F=2):
         super(NGP, self).__init__()
         self.T = T
         self.Nl = Nl
         self.F = F
-        self.L = L  # For encoding directions
+        self.L = L 
         self.aabb_scale = aabb_scale
         self.lookup_tables = torch.nn.ParameterDict(
             {str(i): torch.torch.nn.Parameter((torch.rand(
-                (T, 2), device=device) * 2 - 1) * 1e-4) for i in range(len(Nl))})
+                (T, 2)) * 2 - 1) * 1e-4) for i in range(len(Nl))})
         self.pi1, self.pi2, self.pi3 = 1, 2_654_435_761, 805_459_861
         self.density_MLP = torch.nn.Sequential(torch.nn.Linear(self.F * len(Nl), 64),
-                                         torch.nn.ReLU(), torch.nn.Linear(64, 16)).to(device)
-        self.color_MLP = torch.nn.Sequential(torch.nn.Linear(27 + 16, 64), torch.nn.ReLU(),
+                                         torch.nn.ReLU(), torch.nn.Linear(64, 16))
+        self.color_MLP = torch.nn.Sequential(
+            torch.nn.Linear(27 + 16, 64), torch.nn.ReLU(),
                                        torch.nn.Linear(64, 64), torch.nn.ReLU(),
-                                       torch.nn.Linear(64, 3), torch.nn.Sigmoid()).to(device)
+                                       torch.nn.Linear(64, 3), torch.nn.Sigmoid())
 
     def positional_encoding(self, x):
         out = [x]
@@ -26,7 +30,6 @@ class NGP(torch.nn.Module):
         return torch.cat(out, dim=1)
 
     def forward(self, x, d):
-
         x /= self.aabb_scale
         mask = (x[:, 0].abs() < .5) & (x[:, 1].abs() < .5) & (x[:, 2].abs() < .5)
         x += 0.5  # x in [0, 1]^3
@@ -75,16 +78,14 @@ def compute_accumulated_transmittance(alphas):
 
 
 def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=192):
-    device = ray_origins.device
-    t = torch.linspace(hn, hf, nb_bins, device=device).expand(ray_origins.shape[0], nb_bins)
+    t = torch.linspace(hn, hf, nb_bins).expand(ray_origins.shape[0], nb_bins)
     # Perturb sampling along each ray.
     mid = (t[:, :-1] + t[:, 1:]) / 2.
     lower = torch.cat((t[:, :1], mid), -1)
     upper = torch.cat((mid, t[:, -1:]), -1)
-    u = torch.rand(t.shape, device=device)
+    u = torch.rand(t.shape)
     t = lower + (upper - lower) * u  # [batch_size, nb_bins]
-    delta = torch.cat((t[:, 1:] - t[:, :-1], torch.tensor(
-        [1e10], device=device).expand(ray_origins.shape[0], 1)), -1)
+    delta = torch.cat((t[:, 1:] - t[:, :-1], torch.tensor([1e10]).expand(ray_origins.shape[0], 1)), -1)
 
     # Compute the 3D points along each ray
     x = ray_origins.unsqueeze(1) + t.unsqueeze(2) * ray_directions.unsqueeze(1)
@@ -96,3 +97,33 @@ def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=1
     c = (weights * colors.reshape(x.shape)).sum(dim=1)
     weight_sum = weights.sum(-1).sum(-1)  # Regularization for white background
     return c + 1 - weight_sum.unsqueeze(-1)
+
+def train(nerf_model, optimizer, data_loader, device='cpu', hn=0, hf=1, nb_epochs=10,
+          nb_bins=192, H=400, W=400):
+    for _ in range(nb_epochs):
+        for batch in tqdm(data_loader):
+            ray_origins = batch[:, :3].to(device)
+            ray_directions = batch[:, 3:6].to(device)
+            gt_px_values = batch[:, 6:].to(device)
+            pred_px_values = render_rays(nerf_model, ray_origins, ray_directions, 
+                                         hn=hn, hf=hf, nb_bins=nb_bins)
+            loss = ((gt_px_values - pred_px_values) ** 2).mean()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+@torch.no_grad()
+def test(nerf_model, hn, hf, dataset, img_index, chunk_size=20, nb_bins=192, H=400, W=400):
+    ray_origins = dataset[img_index * H * W: (img_index + 1) * H * W, :3]
+    ray_directions = dataset[img_index * H * W: (img_index + 1) * H * W, 3:6]
+
+    px_values = []   # list of regenerated pixel values
+    for i in range(int(np.ceil(H / chunk_size))):   # iterate over chunks
+        ray_origins_ = ray_origins[i * W * chunk_size: (i + 1) * W * chunk_size]    
+        ray_directions_ = ray_directions[i * W * chunk_size: (i + 1) * W * chunk_size]  
+        px_values.append(render_rays(nerf_model, ray_origins_, ray_directions_,
+                                     hn=hn, hf=hf, nb_bins=nb_bins))
+    img = torch.cat(px_values).data.cpu().numpy().reshape(H, W, 3)
+    img = (img.clip(0, 1)*255.).astype(np.uint8)
+    img = Image.fromarray(img)
+    img.save(f'novel_views/img_{img_index}.png')
