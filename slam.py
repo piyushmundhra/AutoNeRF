@@ -11,6 +11,7 @@ import numpy as np
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import plotly 
+import os
 
 plotly.offline.init_notebook_mode(connected=True)
 
@@ -38,7 +39,7 @@ def get_models():
     max_depth = 20 # 20 for indoor model, 80 for outdoor model
 
     model = dpt.DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
-    model.load_state_dict(torch.load(f'./Models/depth_anything_v2_metric_{dataset}_{encoder}.pth', map_location='cpu'))
+    model.load_state_dict(torch.load(f'./models/depth_anything_v2_metric_{dataset}_{encoder}.pth', map_location='cpu'))
 
     config = {
         'superpoint': {
@@ -142,6 +143,8 @@ def img(path: str):
     image = cv2.imread(path)  # H, W, C
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     image = cv2.resize(image, (518,518), interpolation=cv2.INTER_CUBIC)
+    image = image / 255.0
+    image = image.astype(np.float32)
     return image
 
 def get_images(prefix: str):
@@ -155,7 +158,7 @@ def get_images(prefix: str):
     Returns:
         list: A list of processed images.
     """
-    return [img(f) for f in sorted(glob(f"./Images/{prefix}_*.jpg"))]
+    return [img(f) for f in sorted(glob(f"./images/{prefix}_*.jpg"))]
 
 def preprocess_image_depth(image: np.ndarray):
     """
@@ -167,7 +170,6 @@ def preprocess_image_depth(image: np.ndarray):
     Returns:
         np.ndarray: The preprocessed image.
     """
-    image = image / 255.0
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
     image = (image-mean)/std
@@ -185,7 +187,6 @@ def preprocess_image_matcher(image: np.ndarray) -> torch.Tensor:
         torch.Tensor: The preprocessed image tensor.
     """
     image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    image = image / 255.0
     image = image.astype(np.float32)
     tensor = torch.from_numpy(image).float().to(torch.device('cpu')).unsqueeze(0).unsqueeze(0)
     return tensor
@@ -338,7 +339,11 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
         ray_direction_vectors.append(np.dot(ray_direction_vectors[-1], t[0].T))
     return np.array(ray_direction_vectors)
 
-def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: Matching):
+def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
+    data_path = f'./data/{image_prefix}.pt'
+    if os.path.exists(data_path) and not force_reload:
+        return torch.load(data_path)
+
     images = get_images(image_prefix)
     match_inputs = [preprocess_image_matcher(x) for x in images]
     depth_inputs = [preprocess_image_depth(x) for x in images]
@@ -354,8 +359,10 @@ def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: M
     colors = colors.reshape(num_images * resolution, 3)
     ray_direction_vectors = ray_direction_vectors.reshape(num_images * resolution, 3)
     positions = np.repeat(positions, resolution, axis=0)
-
-    return np.concatenate((colors, ray_direction_vectors, positions), axis=1)
+    data = np.concatenate((positions, ray_direction_vectors, colors), axis=1)
+    data_tensor = torch.tensor(data, dtype=torch.float32)
+    torch.save(data_tensor, data_path)
+    return data_tensor
 
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------

@@ -3,6 +3,8 @@ from PIL import Image
 import numpy as np
 from tqdm import tqdm
 
+# taken from https://github.com/MaximeVandegar/Papers-in-100-Lines-of-Code/tree/main/Instant_Neural_Graphics_Primitives_with_a_Multiresolution_Hash_Encoding
+
 class NGP(torch.nn.Module):
     def __init__(self, T, Nl, L, aabb_scale, F=2):
         super(NGP, self).__init__()
@@ -98,19 +100,19 @@ def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=1
     weight_sum = weights.sum(-1).sum(-1)  # Regularization for white background
     return c + 1 - weight_sum.unsqueeze(-1)
 
-def train(nerf_model, optimizer, data_loader, device='cpu', hn=0, hf=1, nb_epochs=10,
-          nb_bins=192, H=400, W=400):
+def train(nerf_model, optimizer, data_loader, hn=0, hf=1, nb_epochs=10, nb_bins=192):
     for _ in range(nb_epochs):
         for batch in tqdm(data_loader):
-            ray_origins = batch[:, :3].to(device)
-            ray_directions = batch[:, 3:6].to(device)
-            gt_px_values = batch[:, 6:].to(device)
+            ray_origins = batch[:, :3]
+            ray_directions = batch[:, 3:6]
+            gt_px_values = batch[:, 6:]
             pred_px_values = render_rays(nerf_model, ray_origins, ray_directions, 
                                          hn=hn, hf=hf, nb_bins=nb_bins)
             loss = ((gt_px_values - pred_px_values) ** 2).mean()
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+            print(f"Loss: {loss.item()}")
 
 @torch.no_grad()
 def test(nerf_model, hn, hf, dataset, img_index, chunk_size=20, nb_bins=192, H=400, W=400):
