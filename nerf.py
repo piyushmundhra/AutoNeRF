@@ -1,131 +1,152 @@
 import torch
-from PIL import Image
-import numpy as np
-from tqdm import tqdm
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
 
-# taken from https://github.com/MaximeVandegar/Papers-in-100-Lines-of-Code/tree/main/Instant_Neural_Graphics_Primitives_with_a_Multiresolution_Hash_Encoding
+class NeRFModel(nn.Module):
+    """
+    Neural Radiance Fields (NeRF) Model.
 
-class NGP(torch.nn.Module):
-    def __init__(self, T, Nl, L, aabb_scale, F=2):
-        super(NGP, self).__init__()
-        self.T = T
-        self.Nl = Nl
-        self.F = F
-        self.L = L 
-        self.aabb_scale = aabb_scale
-        self.lookup_tables = torch.nn.ParameterDict(
-            {str(i): torch.torch.nn.Parameter((torch.rand(
-                (T, 2)) * 2 - 1) * 1e-4) for i in range(len(Nl))})
-        self.pi1, self.pi2, self.pi3 = 1, 2_654_435_761, 805_459_861
-        self.density_MLP = torch.nn.Sequential(torch.nn.Linear(self.F * len(Nl), 64),
-                                         torch.nn.ReLU(), torch.nn.Linear(64, 16))
-        self.color_MLP = torch.nn.Sequential(
-            torch.nn.Linear(27 + 16, 64), torch.nn.ReLU(),
-                                       torch.nn.Linear(64, 64), torch.nn.ReLU(),
-                                       torch.nn.Linear(64, 3), torch.nn.Sigmoid())
+    Args:
+        D (int): Number of layers in the MLP.
+        W (int): Width of each layer.
+        input_ch (int): Number of input channels for the position vector.
+        input_ch_dir (int): Number of input channels for the direction vector.
+        output_ch (int): Number of output channels (RGB + density).
+    """
+    def __init__(self, D=8, W=256, input_ch=3, input_ch_dir=3, output_ch=4):
+        super(NeRFModel, self).__init__()
+        self.D = D
+        self.W = W
+        self.input_ch = input_ch
+        self.input_ch_dir = input_ch_dir
+        self.output_ch = output_ch
 
-    def positional_encoding(self, x):
-        out = [x]
-        for j in range(self.L):
-            out.append(torch.sin(2 ** j * x))
-            out.append(torch.cos(2 ** j * x))
-        return torch.cat(out, dim=1)
+        self.pts_linears = nn.ModuleList(
+            [nn.Linear(input_ch, W)] +
+            [nn.Linear(W, W) if i % 4 != 0 else nn.Linear(W + input_ch, W) for i in range(D-1)]
+        )
+        self.views_linears = nn.ModuleList([nn.Linear(input_ch_dir + W, W // 2)])
 
-    def forward(self, x, d):
-        x /= self.aabb_scale
-        mask = (x[:, 0].abs() < .5) & (x[:, 1].abs() < .5) & (x[:, 2].abs() < .5)
-        x += 0.5  # x in [0, 1]^3
+        self.feature_linear = nn.Linear(W, W)
+        self.alpha_linear = nn.Linear(W, 1)
+        self.rgb_linear = nn.Linear(W // 2, 3)
 
-        color = torch.zeros((x.shape[0], 3), device=x.device)
-        log_sigma = torch.zeros((x.shape[0]), device=x.device) - 100000
-        features = torch.empty((x[mask].shape[0], self.F * len(self.Nl)), device=x.device)
-        for i, N in enumerate(self.Nl):
-            # Computing vertices, use torch.nn.functional.grid_sample convention
-            floor = torch.floor(x[mask] * N)
-            ceil = torch.ceil(x[mask] * N)
-            vertices = torch.zeros((x[mask].shape[0], 8, 3), dtype=torch.int64, device=x.device)
-            vertices[:, 0] = floor
-            vertices[:, 1] = torch.cat((ceil[:, 0, None], floor[:, 1, None], floor[:, 2, None]), dim=1)
-            vertices[:, 2] = torch.cat((floor[:, 0, None], ceil[:, 1, None], floor[:, 2, None]), dim=1)
-            vertices[:, 4] = torch.cat((floor[:, 0, None], floor[:, 1, None], ceil[:, 2, None]), dim=1)
-            vertices[:, 6] = torch.cat((floor[:, 0, None], ceil[:, 1, None], ceil[:, 2, None]), dim=1)
-            vertices[:, 5] = torch.cat((ceil[:, 0, None], floor[:, 1, None], ceil[:, 2, None]), dim=1)
-            vertices[:, 3] = torch.cat((ceil[:, 0, None], ceil[:, 1, None], floor[:, 2, None]), dim=1)
-            vertices[:, 7] = ceil
+    def forward(self, x):
+        """
+        Forward pass of the NeRF model.
 
-            # hashing
-            a = vertices[:, :, 0] * self.pi1
-            b = vertices[:, :, 1] * self.pi2
-            c = vertices[:, :, 2] * self.pi3
-            h_x = torch.remainder(torch.bitwise_xor(torch.bitwise_xor(a, b), c), self.T)
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, input_ch + input_ch_dir).
 
-            # Lookup
-            looked_up = self.lookup_tables[str(i)][h_x].transpose(-1, -2)
-            volume = looked_up.reshape((looked_up.shape[0], 2, 2, 2, 2))
-            features[:, i*2:(i+1)*2] = torch.torch.nn.functional.grid_sample(
-                volume,
-                ((x[mask] * N - floor) - 0.5).unsqueeze(1).unsqueeze(1).unsqueeze(1)
-                ).squeeze(-1).squeeze(-1).squeeze(-1)
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, output_ch).
+        """
+        input_pts, input_dirs = torch.split(x, [self.input_ch, self.input_ch_dir], dim=-1)
+        h = input_pts
+        for i, l in enumerate(self.pts_linears):
+            h = nn.functional.relu(l(h))
+            # Skip connection: concatenate input_pts with h every 4 layers
+            if i % 4 == 0 and i > 0:
+                h = torch.cat([input_pts, h], -1)
 
-        xi = self.positional_encoding(d[mask])
-        h = self.density_MLP(features)
-        log_sigma[mask] = h[:, 0]
-        color[mask] = self.color_MLP(torch.cat((h, xi), dim=1))
-        return color, torch.exp(log_sigma)
+        alpha = self.alpha_linear(h)
+        feature = self.feature_linear(h)
+        h = torch.cat([feature, input_dirs], -1)
+
+        for l in self.views_linears:
+            h = nn.functional.relu(l(h))
+
+        rgb = self.rgb_linear(h)
+        outputs = torch.cat([rgb, alpha], -1)
+        return outputs
+
+def sample_along_rays(origins, directions, num_samples, near, far):
+    """
+    Samples points along rays.
+
+    Args:
+        origins (torch.Tensor): Tensor of shape (B, 3) representing the origins of the rays.
+        directions (torch.Tensor): Tensor of shape (B, 3) representing the directions of the rays.
+        num_samples (int): Number of samples to take along each ray.
+        near (float): Near bound for sampling.
+        far (float): Far bound for sampling.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, num_samples, 3) representing the sampled points along the rays.
+    """
+    t_vals = torch.linspace(near, far, num_samples)
+    sample_points = origins[:, None, :] + directions[:, None, :] * t_vals[None, :, None]
+    return sample_points
+
+def preprocess_data(data, num_samples, near, far):
+    """
+    Preprocesses the input data for the NeRF model.
+
+    Args:
+        data (torch.Tensor): Tensor of shape (B, 9) where [:, :3] is position, [:, 3:6] is direction, and [:, 6:] is target RGB.
+        num_samples (int): Number of samples to take along each ray.
+        near (float): Near bound for sampling.
+        far (float): Far bound for sampling.
+
+    Returns:
+        tuple: A tuple containing:
+            - positions (torch.Tensor): Tensor of shape (B, num_samples, 3) representing the sampled points along the rays.
+            - directions_expanded (torch.Tensor): Tensor of shape (B * num_samples, 3) representing the expanded directions.
+            - target_rgb (torch.Tensor): Tensor of shape (B, 3) representing the target RGB values.
+    """
+    origins = data[:, :3]
+    directions = data[:, 3:6]
+    target_rgb = data[:, 6:]
     
-def compute_accumulated_transmittance(alphas):
-    accumulated_transmittance = torch.cumprod(alphas, 1)
-    return torch.cat((torch.ones((accumulated_transmittance.shape[0], 1), device=alphas.device),
-                      accumulated_transmittance[:, :-1]), dim=-1)
+    positions = sample_along_rays(origins, directions, num_samples, near, far)
+    directions_expanded = directions[:, None, :].expand(-1, num_samples, -1).reshape(-1, 3)
+    
+    return positions, directions_expanded, target_rgb
 
+def volume_rendering(rgb, density, depths):
+    # rgb: (B, num_samples, 3)
+    # density: (B, num_samples, 1)
+    # depths: (B, num_samples)
+    # Returns: (B, 3)
+    delta = torch.cat([depths[:, 1:] - depths[:, :-1], torch.tensor([1e10]).expand(depths[:, :1].shape)], -1)
+    alpha = 1 - torch.exp(-density * delta)
+    weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1 - alpha + 1e-10], -1), -1)[:, :-1]
+    rgb_final = torch.sum(weights[:, :, None] * rgb, -2)
+    return rgb_final
 
-def render_rays(nerf_model, ray_origins, ray_directions, hn=0, hf=0.5, nb_bins=192):
-    t = torch.linspace(hn, hf, nb_bins).expand(ray_origins.shape[0], nb_bins)
-    # Perturb sampling along each ray.
-    mid = (t[:, :-1] + t[:, 1:]) / 2.
-    lower = torch.cat((t[:, :1], mid), -1)
-    upper = torch.cat((mid, t[:, -1:]), -1)
-    u = torch.rand(t.shape)
-    t = lower + (upper - lower) * u  # [batch_size, nb_bins]
-    delta = torch.cat((t[:, 1:] - t[:, :-1], torch.tensor([1e10]).expand(ray_origins.shape[0], 1)), -1)
+def train(data_loader: DataLoader):
+    num_samples = 64
+    near = 1.0
+    far = 5.0
+    learning_rate = 1e-4
+    num_epochs = 100
 
-    # Compute the 3D points along each ray
-    x = ray_origins.unsqueeze(1) + t.unsqueeze(2) * ray_directions.unsqueeze(1)
-    # Expand the ray_directions tensor to match the shape of x
-    ray_directions = ray_directions.expand(nb_bins, ray_directions.shape[0], 3).transpose(0, 1)
-    colors, sigma = nerf_model(x.reshape(-1, 3), ray_directions.reshape(-1, 3))
-    alpha = 1 - torch.exp(-sigma.reshape(x.shape[:-1]) * delta)  # [batch_size, nb_bins]
-    weights = compute_accumulated_transmittance(1 - alpha).unsqueeze(2) * alpha.unsqueeze(2)
-    c = (weights * colors.reshape(x.shape)).sum(dim=1)
-    weight_sum = weights.sum(-1).sum(-1)  # Regularization for white background
-    return c + 1 - weight_sum.unsqueeze(-1)
+    model = NeRFModel()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
-def train(nerf_model, optimizer, data_loader, hn=0, hf=1, nb_epochs=10, nb_bins=192):
-    for _ in range(nb_epochs):
-        for batch in tqdm(data_loader):
-            ray_origins = batch[:, :3]
-            ray_directions = batch[:, 3:6]
-            gt_px_values = batch[:, 6:]
-            pred_px_values = render_rays(nerf_model, ray_origins, ray_directions, 
-                                         hn=hn, hf=hf, nb_bins=nb_bins)
-            loss = ((gt_px_values - pred_px_values) ** 2).mean()
+    # Training loop
+    for epoch in range(num_epochs):
+        for batch in data_loader:  # Assume we have a data loader
             optimizer.zero_grad()
+            
+            # Preprocess data
+            positions, directions, target_rgb = preprocess_data(batch, num_samples, near, far)
+            
+            # Forward pass
+            model_output = model(torch.cat([positions, directions], dim=-1))
+            rgb_output = model_output[:, :3].reshape(-1, num_samples, 3)
+            density_output = model_output[:, 3].reshape(-1, num_samples, 1)
+            
+            # Volume rendering
+            depths = positions[:, :, 2]  # Assuming Z is depth
+            rendered_rgb = volume_rendering(rgb_output, density_output, depths)
+            
+            # Compute loss
+            loss = nn.MSELoss()(rendered_rgb, target_rgb)
+            
+            # Backward pass and optimization
             loss.backward()
             optimizer.step()
-            print(f"Loss: {loss.item()}")
-
-@torch.no_grad()
-def test(nerf_model, hn, hf, dataset, img_index, chunk_size=20, nb_bins=192, H=400, W=400):
-    ray_origins = dataset[img_index * H * W: (img_index + 1) * H * W, :3]
-    ray_directions = dataset[img_index * H * W: (img_index + 1) * H * W, 3:6]
-
-    px_values = []   # list of regenerated pixel values
-    for i in range(int(np.ceil(H / chunk_size))):   # iterate over chunks
-        ray_origins_ = ray_origins[i * W * chunk_size: (i + 1) * W * chunk_size]    
-        ray_directions_ = ray_directions[i * W * chunk_size: (i + 1) * W * chunk_size]  
-        px_values.append(render_rays(nerf_model, ray_origins_, ray_directions_,
-                                     hn=hn, hf=hf, nb_bins=nb_bins))
-    img = torch.cat(px_values).data.cpu().numpy().reshape(H, W, 3)
-    img = (img.clip(0, 1)*255.).astype(np.uint8)
-    img = Image.fromarray(img)
-    img.save(f'novel_views/img_{img_index}.png')
+        
+        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss.item()}")
