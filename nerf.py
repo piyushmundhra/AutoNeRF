@@ -43,28 +43,25 @@ class NeRFModel(nn.Module):
             torch.Tensor: Output tensor of shape (batch_size, output_ch).
         """
         input_pts, input_dirs = torch.split(x, [self.input_ch, self.input_ch_dir], dim=-1)
-        print(f"input_pts shape: {input_pts.shape}")
-        print(f"input_dirs shape: {input_dirs.shape}")
+
         h = input_pts
         for i, l in enumerate(self.pts_linears):
             # Skip connection: concatenate input_pts with h every 4 layers
             if i == 4:
                 h = torch.cat([input_pts, h], -1)
-                print(f"h shape after skip connection at layer {i}: {h.shape}")
 
             h = nn.functional.relu(l(h))
-            print(f"h shape after layer {i}: {h.shape}")
 
         alpha = self.alpha_linear(h)
         feature = self.feature_linear(h)
         h = torch.cat([feature, input_dirs], -1)
-        print(f"h shape after concatenating feature and input_dirs: {h.shape}")
 
         for l in self.views_linears:
             h = nn.functional.relu(l(h))
 
         rgb = self.rgb_linear(h)
         outputs = torch.cat([rgb, alpha], -1)
+        print("finished forward pass")
         return outputs
 
 def sample_along_rays(origins, directions, num_samples, near, far):
@@ -119,9 +116,10 @@ def preprocess_data(data : torch.Tensor, num_samples : int, near : float, far : 
 
 def volume_rendering(rgb, density, depths):
     # rgb: (B, num_samples, 3)
-    # density: (B, num_samples, 1)
+    # density: (B, num_samples)
     # depths: (B, num_samples)
     # Returns: (B, 3)
+    print(rgb.shape, density.shape, depths.shape)
     delta = torch.cat([depths[:, 1:] - depths[:, :-1], torch.tensor([1e10]).expand(depths[:, :1].shape)], -1)
     alpha = 1 - torch.exp(-density * delta)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1 - alpha + 1e-10], -1), -1)[:, :-1]
@@ -134,27 +132,28 @@ def infer(model: NeRFModel, position: torch.Tensor, direction: torch.Tensor):
 
 @torch.enable_grad()
 def train(model: NeRFModel, data_loader: DataLoader):
-    num_samples = 64
-    near = 1.0
-    far = 5.0
-    learning_rate = 1e-4
-    num_epochs = 100
+    num_samples : int = 64
+    near : float = 1.0
+    far : float = 5.0
+    learning_rate : float = 1e-4
+    num_epochs : int = 100
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
     for epoch in range(num_epochs):
         for batch in data_loader:  
-            B = batch.shape
+            B : int = batch.shape[0]
             optimizer.zero_grad()
             
             positions, directions, target_rgb = preprocess_data(batch, num_samples, near, far)
             
-            model_output = model(torch.cat([positions, directions], dim=-1))
-            rgb_output = model_output[:, :3].reshape(B, num_samples, 3)
-            density_output = model_output[:, 3].reshape(B, num_samples, 1)
+            model_output : torch.Tensor = model.forward(x=torch.cat([positions, directions], dim=-1))
+            rgb_pred = model_output[:, :3].reshape(shape=(B, num_samples, 3))
+            density = model_output[:, 3].reshape(shape=(B, num_samples, 1)).squeeze(-1)
             
-            depths = positions.reshape(B, num_samples, 3)[:, :, 2]  
-            rendered_rgb = volume_rendering(rgb_output, density_output, depths)
+            depths = positions.reshape(shape=(B, num_samples, 3))[:, :, 2] 
+        
+            rendered_rgb = volume_rendering(rgb_pred, density, depths)
             
             loss = nn.MSELoss()(rendered_rgb, target_rgb)
             
