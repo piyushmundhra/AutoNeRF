@@ -14,11 +14,12 @@ import plotly
 import os
 
 plotly.offline.init_notebook_mode(connected=True)
+RESOLUTION : int = 518 * 518
 
 # OUTLINE: 
 #   RUNTIME INIT UTILS
-#   HELPERS FOR PREPROCESSOR
-#   MAIN PREPROCESSOR
+#   HELPERS FOR PREPROCESSORS
+#   MAIN PREPROCESSORS
 #   VISUALIZATION
 
 # -----------------------------------------------------------------------------------------
@@ -348,6 +349,39 @@ def decompose_rotation_matrix(R):
         np.degrees(z)  # azimuth
         ])
 
+def compute_rotation_matrix(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
+    """
+    Compute the rotation matrix that rotates vector v1 to vector v2.
+
+    Args:
+        v1 (np.ndarray): A 3D direction vector.
+        v2 (np.ndarray): A 3D direction vector.
+
+    Returns:
+        np.ndarray: A 3x3 rotation matrix.
+    """
+    # Normalize the vectors
+    v1 = v1 / np.linalg.norm(v1)
+    v2 = v2 / np.linalg.norm(v2)
+
+    # Compute the cross product and the dot product
+    cross_prod = np.cross(v1, v2)
+    dot_prod = np.dot(v1, v2)
+
+    # Compute the skew-symmetric cross-product matrix
+    K = np.array([
+        [0, -cross_prod[2], cross_prod[1]],
+        [cross_prod[2], 0, -cross_prod[0]],
+        [-cross_prod[1], cross_prod[0], 0]
+    ])
+
+    # Compute the rotation matrix using Rodrigues' rotation formula
+    I = np.eye(3)
+    R = I + K + K @ K * ((1 - dot_prod) / (np.linalg.norm(cross_prod) ** 2))
+    print(f"Rotation: \n{R}")
+
+    return R
+
 def compute_positions(transforms: list[tuple[np.ndarray, np.ndarray]]):
     positions = [np.array([0,0,0])]
     for t in transforms:
@@ -360,7 +394,6 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
         ray_direction_vectors.append(np.dot(ray_direction_vectors[-1], t[0].T))
     return np.array(ray_direction_vectors)
 
-
 # ------------------------------- HELPERS FOR PREPROCESSOR --------------------------------
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
@@ -368,10 +401,10 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
-# ----------------------------------- MAIN PREPROCESSOR -----------------------------------
+# ----------------------------------- MAIN PREPROCESSORS -----------------------------------
 
 
-def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
+def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
     data_path = f'./data/{image_prefix}.pt'
     if os.path.exists(data_path) and not force_reload:
         return torch.load(data_path)
@@ -387,17 +420,24 @@ def images_to_nerf_inputs(image_prefix: str, model: torch.nn.Module, matching: M
     ray_direction_vectors = compute_ray_directions(transforms)
     colors = np.array([get_colors(x) for x in images])
 
-    num_images, resolution, _ = colors.shape
-    colors = colors.reshape(num_images * resolution, 3)
-    ray_direction_vectors = ray_direction_vectors.reshape(num_images * resolution, 3)
-    positions = np.repeat(positions, resolution, axis=0)
+    num_images, _, _ = colors.shape
+    colors = colors.reshape(num_images * RESOLUTION, 3)
+    ray_direction_vectors = ray_direction_vectors.reshape(num_images * RESOLUTION, 3)
+    positions = np.repeat(positions, RESOLUTION, axis=0)
     data = np.concatenate((positions, ray_direction_vectors, colors), axis=1)
     data_tensor = torch.tensor(data, dtype=torch.float32)
     torch.save(data_tensor, data_path)
     return data_tensor
 
+def inference_preprocessor(position: np.ndarray, direction: np.ndarray):
+    R = compute_rotation_matrix(np.array([0,0,1]), direction)
+    rays = np.dot(get_rays(), R.T)
+    positions = np.repeat(np.array([position]), RESOLUTION, axis=0)
+    data = np.concatenate((positions, rays), axis=1)
+    data_tensor = torch.tensor(data, dtype=torch.float32)
+    return data_tensor
 
-# ----------------------------------- MAIN PREPROCESSOR -----------------------------------
+# ----------------------------------- MAIN PREPROCESSORS -----------------------------------
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
