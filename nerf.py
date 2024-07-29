@@ -57,10 +57,17 @@ def preprocess_data(data : torch.Tensor, num_samples : int, near : float, far : 
             target_rgb)
 
 def volume_rendering(rgb, density, depths):
-    # rgb: (B, num_samples, 3)
-    # density: (B, num_samples)
-    # depths: (B, num_samples)
-    # Returns: (B, 3)
+    """
+    Performs volume rendering to compute the final RGB values along rays.
+
+    Args:
+        rgb (torch.Tensor): Tensor of shape (B, num_samples, 3) representing the RGB values sampled along the rays.
+        density (torch.Tensor): Tensor of shape (B, num_samples) representing the density values sampled along the rays.
+        depths (torch.Tensor): Tensor of shape (B, num_samples) representing the depth values sampled along the rays.
+
+    Returns:
+        torch.Tensor: Tensor of shape (B, 3) representing the final RGB values after volume rendering.
+    """
     delta = torch.cat([depths[:, 1:] - depths[:, :-1], torch.tensor([1e10]).expand(depths[:, :1].shape)], -1)
     alpha = 1 - torch.exp(-density * delta)
     weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1)), 1 - alpha + 1e-10], -1), -1)[:, :-1]
@@ -144,14 +151,14 @@ def infer(model: NeRFModel, data_loader: DataLoader):
         origins: torch.Tensor = data[:, :3]
         directions: torch.Tensor = data[:, 3:6]
         positions = sample_along_rays(origins, directions, num_samples, near, far)
+        _depths = positions[:, :, 2]
         positions = positions.reshape(shape=(positions.shape[0] * num_samples, 3))
-
+        
         directions = directions.repeat_interleave(repeats=num_samples, dim=0)
         model_output = model.forward(x=torch.cat([positions, directions], dim=-1))
         _rgb_pred = model_output[:, :3].reshape(B, num_samples, 3)
         _density = model_output[:, 3].reshape(B, num_samples, 1).squeeze(-1)
-        _depths = positions[:, 2]
-
+        
         if rgb_pred is None:
             rgb_pred = _rgb_pred
             density = _density
@@ -165,8 +172,8 @@ def infer(model: NeRFModel, data_loader: DataLoader):
     print(density.shape)
     print(depths.shape)
 
-    rendered_rgb = volume_rendering(rgb_pred, density, depths.unsqueeze(0))
-    rendered_rgb = (rendered_rgb * 255).clamp(0, 255).byte()
+    rendered_rgb = volume_rendering(rgb_pred, density, depths)
+    rendered_rgb = (rendered_rgb * 255).clamp(0, 255).byte().reshape((518,518,3))
     image = Image.fromarray(rendered_rgb.numpy())
 
     return image

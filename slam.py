@@ -360,22 +360,25 @@ def compute_rotation_matrix(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     Returns:
         np.ndarray: A 3x3 rotation matrix.
     """
-    # Normalize the vectors
     v1 = v1 / np.linalg.norm(v1)
     v2 = v2 / np.linalg.norm(v2)
 
-    # Compute the cross product and the dot product
+    if np.allclose(v1, v2):
+        R = np.eye(3)
+        print(f"Rotation: \n{R}")
+        return R
+
     cross_prod = np.cross(v1, v2)
     dot_prod = np.dot(v1, v2)
 
-    # Compute the skew-symmetric cross-product matrix
+    # skew-symmetric cross-product matrix
     K = np.array([
         [0, -cross_prod[2], cross_prod[1]],
         [cross_prod[2], 0, -cross_prod[0]],
         [-cross_prod[1], cross_prod[0], 0]
     ])
 
-    # Compute the rotation matrix using Rodrigues' rotation formula
+    # Rodrigues' rotation formula
     I = np.eye(3)
     R = I + K + K @ K * ((1 - dot_prod) / (np.linalg.norm(cross_prod) ** 2))
     print(f"Rotation: \n{R}")
@@ -402,7 +405,6 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
 # -----------------------------------------------------------------------------------------
 # -----------------------------------------------------------------------------------------
 # ----------------------------------- MAIN PREPROCESSORS -----------------------------------
-
 
 def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
     data_path = f'./data/{image_prefix}.pt'
