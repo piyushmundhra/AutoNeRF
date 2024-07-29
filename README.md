@@ -29,6 +29,7 @@ pip install -r requirements.txt
 
 ## Citations
 
+```bibtex
 @inproceedings{sarlin20superglue,
   author    = {Paul-Edouard Sarlin and
                Daniel DeTone and
@@ -53,3 +54,4 @@ pip install -r requirements.txt
   booktitle={CVPR},
   year={2024}
 }
+```
