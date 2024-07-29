@@ -26,3 +26,30 @@ git clone https://github.com/piyushmundhra/AutoNeRF.git
 cd AutoNeRF
 pip install -r requirements.txt
 ```
+
+## Citations
+
+@inproceedings{sarlin20superglue,
+  author    = {Paul-Edouard Sarlin and
+               Daniel DeTone and
+               Tomasz Malisiewicz and
+               Andrew Rabinovich},
+  title     = {{SuperGlue}: Learning Feature Matching with Graph Neural Networks},
+  booktitle = {CVPR},
+  year      = {2020},
+  url       = {https://arxiv.org/abs/1911.11763}
+}
+
+@article{depth_anything_v2,
+  title={Depth Anything V2},
+  author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Zhao, Zhen and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
+  journal={arXiv:2406.09414},
+  year={2024}
+}
+
+@inproceedings{depth_anything_v1,
+  title={Depth Anything: Unleashing the Power of Large-Scale Unlabeled Data}, 
+  author={Yang, Lihe and Kang, Bingyi and Huang, Zilong and Xu, Xiaogang and Feng, Jiashi and Zhao, Hengshuang},
+  booktitle={CVPR},
+  year={2024}
+}
