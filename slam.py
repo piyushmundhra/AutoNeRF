@@ -562,3 +562,54 @@ def visualize_rays(data_tensor):
 
     fig.update_layout(scene=dict(aspectmode='data'))
     fig.show()
+
+def visualize_camera_poses(data):
+    """
+        Visualizes camera poses based on the provided data.
+
+        Parameters:
+        data (list): The output of the training_preprocessor function.
+
+        Returns:
+        None
+    """
+    df = pd.DataFrame(data, columns=['x', 'y', 'z', 'xd', 'yd', 'zd', 'r', 'g', 'b'])
+    df['pos'] = list(zip(df['x'], df['y'], df['z']))
+    df['dir'] = list(zip(df['xd'], df['yd'], df['zd']))
+    df['rgb'] = list(zip(df['r'], df['g'], df['b']))
+    df = df[['pos', 'dir', 'rgb']]
+
+    fig = go.Figure()
+    positions = df['pos'].unique()
+    colors = list(mcolors.CSS4_COLORS.values())[65:][:len(positions)]
+    for i, pos in enumerate(positions):
+        for dir in df[df['pos'] == pos]['dir'][::2000]:
+            try:
+                trace = go.Scatter3d(
+                    x=[pos[0], pos[0] + dir[0]],
+                    y=[pos[1], pos[1] + dir[1]],
+                    z=[pos[2], pos[2] + dir[2]],
+                    mode='lines',
+                    line=dict(color=colors[i], width=1)
+                )
+
+                fig.add_trace(trace)
+            except:
+                print(pos, dir)
+    fig.update_layout(
+        scene=dict(
+            aspectmode='data',
+            bgcolor='rgba(0,0,0,0)',
+            xaxis=dict(gridcolor='white', showbackground=False, color='white'),
+            yaxis=dict(gridcolor='white', showbackground=False, color='white'),
+            zaxis=dict(gridcolor='white', showbackground=False, color='white')
+        ),
+        showlegend=False,
+        paper_bgcolor='rgba(0,0,0,0)'
+    )
+    fig.update_layout(
+        width=800,
+        height=800
+    )
+
+    fig.show()
