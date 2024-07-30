@@ -2,6 +2,7 @@ import torch
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib
 from glob import glob
 from depth_anything_v2 import dpt
@@ -12,6 +13,7 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import plotly 
 import os
+import pandas as pd
 
 plotly.offline.init_notebook_mode(connected=True)
 RESOLUTION : int = 518 * 518
@@ -535,3 +537,28 @@ def plot_matches(idx, images, matches):
     ax[0].scatter(mkpts0[:, 0], mkpts0[:, 1], c=color, s=6)
     ax[1].scatter(mkpts1[:, 0], mkpts1[:, 1], c=color, s=6)
     return fig
+
+def visualize_rays(data_tensor):
+    positions = data_tensor[:, :3]
+    ray_directions = data_tensor[:, 3:6]
+
+    colors = list(mcolors.CSS4_COLORS.values())[:len(positions)]
+
+    fig = go.Figure()
+    for i in range(0, len(positions), 400):
+        position = positions[i]
+        ray_direction = ray_directions[i]
+        color = colors[i]
+
+        trace = go.Scatter3d(
+            x=[position[0], position[0] + ray_direction[0]],
+            y=[position[1], position[1] + ray_direction[1]],
+            z=[position[2], position[2] + ray_direction[2]],
+            mode='lines',
+            line=dict(color=color, width=1)
+        )
+
+        fig.add_trace(trace)
+
+    fig.update_layout(scene=dict(aspectmode='data'))
+    fig.show()

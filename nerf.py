@@ -4,7 +4,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from PIL import Image
-import slam
 
 def sample_along_rays(origins, directions, num_samples, near, far):
     """
