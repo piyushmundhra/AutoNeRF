@@ -23,7 +23,7 @@ def sample_along_rays(origins, directions, num_samples, near, far):
     sample_points = origins[:, None, :] + directions[:, None, :] * t_vals[None, :, None]
     return sample_points
 
-def preprocess_data(data : torch.Tensor, num_samples : int, near : float, far : float):
+def preprocess_data(data : torch.Tensor, num_samples : int = 64, near : float = 1.0, far : float = 5.0):
     """
     Preprocesses the input data for the NeRF model.
 

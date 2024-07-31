@@ -409,6 +409,24 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
 # ----------------------------------- MAIN PREPROCESSORS -----------------------------------
 
 def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
+    """
+    Preprocesses the training data for the given image prefix.
+
+    This function loads images, processes them to obtain depth information, matches, 3D projections, transformations, 
+    positions, ray direction vectors, and colors. It then concatenates these into a single tensor and saves it.
+
+    Args:
+        image_prefix (str): The prefix of the image files to be processed.
+        model (torch.nn.Module): The model used for depth estimation.
+        matching (Matching): The matching model used to find correspondences between images.
+        force_reload (bool): If True, forces reprocessing of the images even if a cached file exists.
+
+    Returns:
+        torch.Tensor: The preprocessed data tensor of shape (num_images * RESOLUTION, 9), where:
+                      - The first 3 columns represent the 3D positions.
+                      - The next 3 columns represent the ray direction vectors.
+                      - The last 3 columns represent the RGB colors.
+    """
     data_path = f'./data/{image_prefix}.pt'
     if os.path.exists(data_path) and not force_reload:
         return torch.load(data_path)
