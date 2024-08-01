@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
-from nerf import preprocess_data, volume_rendering
+from nerf import preprocess_data, volume_rendering, sample_along_rays
 
 class MultiResHashEncoding(nn.Module):
     """
@@ -114,7 +114,7 @@ class InstantNGP(nn.Module):
     def __init__(self, encoding_config=None, hidden_dim=64, num_layers=3):
         super().__init__()
 
-        self.encoding = MultiResHashEncoding(**encoding_config) if encoding_config is not None else MultiResHashEncoding(MultiResHashEncoding.DEFAULT_CONFIG)
+        self.encoding = MultiResHashEncoding(**encoding_config) if encoding_config is not None else MultiResHashEncoding(**MultiResHashEncoding.DEFAULT_CONFIG)
         
         self.mlp = nn.Sequential(
             nn.Linear(self.encoding.n_levels * self.encoding.n_features_per_level, hidden_dim),
@@ -129,6 +129,50 @@ class InstantNGP(nn.Module):
         rgb = torch.sigmoid(output[:, :3])  
         alpha = torch.sigmoid(output[:, 3:])  
         return torch.cat([rgb, alpha], dim=-1)
+    
+@torch.no_grad()
+def infer(model: InstantNGP, data_loader: DataLoader):
+    model.eval()  # Set the model to evaluation mode
+
+    rgb_pred = None
+    density = None
+    depths = None
+    
+    for data in tqdm(data_loader, desc="Inference Progress", unit="batch"):
+        B = data.shape[0]
+        num_samples = 64
+        near = 1.0
+        far = 5.0
+
+        origins: torch.Tensor = data[:, :3]
+        directions: torch.Tensor = data[:, 3:6]
+        positions = sample_along_rays(origins, directions, num_samples, near, far)
+        _depths = positions[:, :, 2]
+        positions = positions.reshape(shape=(positions.shape[0] * num_samples, 3))
+        
+        directions = directions.repeat_interleave(repeats=num_samples, dim=0)
+        model_output = model.forward(x=positions)
+        _rgb_pred = model_output[:, :3].reshape(B, num_samples, 3)
+        _density = model_output[:, 3].reshape(B, num_samples, 1).squeeze(-1)
+        
+        if rgb_pred is None:
+            rgb_pred = _rgb_pred
+            density = _density
+            depths = _depths
+        else:
+            rgb_pred = torch.concat((rgb_pred, _rgb_pred), 0)
+            density = torch.concat((density, _density), 0)
+            depths = torch.concat((depths, _depths), 0)
+    
+    print(rgb_pred.shape)
+    print(density.shape)
+    print(depths.shape)
+
+    rendered_rgb = volume_rendering(rgb_pred, density, depths)
+    rendered_rgb = (rendered_rgb * 255).clamp(0, 255).byte().reshape((518,518,3))
+    image = Image.fromarray(rendered_rgb.numpy())
+
+    return image
 
 @torch.enable_grad()
 def train(model: InstantNGP, data_loader: DataLoader):
@@ -136,7 +180,7 @@ def train(model: InstantNGP, data_loader: DataLoader):
     near: float = 1.0
     far: float = 5.0
     learning_rate: float = 1e-4
-    num_epochs: int = 10
+    num_epochs: int = 1
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -149,7 +193,7 @@ def train(model: InstantNGP, data_loader: DataLoader):
 
                 positions, _, target_rgb = preprocess_data(batch, num_samples, near, far)
 
-                model_output: torch.Tensor = model.forward(x=torch.cat(positions, dim=-1))
+                model_output: torch.Tensor = model.forward(x=positions)
 
                 rgb_pred = model_output[:, :3].reshape(shape=(B, num_samples, 3))
                 density = model_output[:, 3].reshape(shape=(B, num_samples, 1)).squeeze(-1)
