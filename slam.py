@@ -434,9 +434,12 @@ def compute_rotation_matrix(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     return R
 
 def compute_positions(transforms: list[tuple[np.ndarray, np.ndarray]]):
-    positions = [np.array([0,0,0])]
+    positions = [np.array([0, 0, 0])]
     for t in transforms:
-        positions.append(positions[-1] + t[1])
+        translation = t[1]
+        translation[0] = -translation[0]  # Negate the x-component
+        positions.append(positions[-1] + translation)
+
     return np.array(positions)
 
 def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]], camera_params=iPhone15ProSquareVideoCamera()):
@@ -647,7 +650,7 @@ def visualize_camera_poses(data):
     positions = df['pos'].unique()
     colors = list(mcolors.CSS4_COLORS.values())[65:][:len(positions)]
     for i, pos in enumerate(positions):
-        for dir in df[df['pos'] == pos]['dir'][::2000]:
+        for dir in df[df['pos'] == pos]['dir'][::5000]:
             try:
                 trace = go.Scatter3d(
                     x=[pos[0], pos[0] + dir[0]],
