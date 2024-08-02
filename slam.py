@@ -227,6 +227,7 @@ def get_images(prefix: str):
     Returns:
         list: A list of processed images.
     """
+    print(sorted(glob(f"./images/{prefix}/*.jpg"), key=extract_suffix))
     return [img(f) for f in sorted(glob(f"./images/{prefix}/*.jpg"), key=extract_suffix)]
 
 def preprocess_image_depth(image: np.ndarray):
