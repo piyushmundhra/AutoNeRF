@@ -13,6 +13,7 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 import plotly 
 import os
+import re
 import pandas as pd
 
 plotly.offline.init_notebook_mode(connected=True)
@@ -73,6 +74,15 @@ def get_models():
     return model, matching
 
 @dataclass(frozen=True)
+class iPhone15ProSquareVideoCamera():
+    n: float = 1440 # px
+    center: float = 1440 / 2 # idx
+    focal_length: float = 23 # mm
+    sensor_size: float= 1/1.28 # in
+    camera_dpi: int = n / sensor_size # px / in
+    focal_length_px: float = focal_length * camera_dpi / 25.4 #px
+
+@dataclass(frozen=True)
 class iPhone15ProMainCamera():
     n: float = 4284 # px
     center: float = 4284 / 2 # idx
@@ -91,7 +101,7 @@ class iPhone15ProMainCamera():
 # ------------------------------- HELPERS FOR PREPROCESSOR --------------------------------
 
 
-def get_rays(N=518, camera_params=iPhone15ProMainCamera()):
+def get_rays(N=518, camera_params=iPhone15ProSquareVideoCamera()):
     """
     Generates a grid of rays emanating from the camera's viewpoint.
 
@@ -171,6 +181,41 @@ def img(path: str):
     image = image.astype(np.float32)
     return image
 
+def sample_video(video_name: str, fps: int = 2, base_fps: int = 30):
+    """
+    Samples frames from a video at a specified frame rate and writes them to /images/[video_name]_[frame_number].jpg.
+
+    Args:
+        video_name (str): The name of the video file.
+        fps (int): The frame rate at which to sample the video.
+        base_fps (int): The base frame rate of the video.
+    """
+    cap = cv2.VideoCapture(f"./videos/{video_name}.mov")
+
+    frames = []
+    frame_rate = base_fps // fps
+    count = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if count % frame_rate == 0:
+            frames.append(frame)
+        count += 1
+
+    cap.release()
+
+    if not os.path.exists(f'./images/{video_name}'):
+        os.makedirs(f'./images/{video_name}')
+
+    for i, frame in enumerate(frames):
+        img_name = f"img{i:05d}"
+        cv2.imwrite(f'./images/{video_name}/_{img_name}.jpg', frame)
+
+def extract_suffix(filename):
+    match = re.search(r'img(\d+)\.jpg$', filename)
+    return int(match.group(1)) if match else -1
+
 def get_images(prefix: str):
     """
     Retrieves and processes all images with the given prefix from the './Images/' directory.
@@ -182,7 +227,7 @@ def get_images(prefix: str):
     Returns:
         list: A list of processed images.
     """
-    return [img(f) for f in sorted(glob(f"./images/{prefix}_*.jpg"))]
+    return [img(f) for f in sorted(glob(f"./images/{prefix}/*.jpg"), key=extract_suffix)]
 
 def preprocess_image_depth(image: np.ndarray):
     """
@@ -241,7 +286,7 @@ def postprocess_matches(pred: dict, num_matches: int = -1):
     mconf = np.array(mconf)[idx]
     return mkpts0, mkpts1, mconf
 
-def project_point(_x, _y, depth, N=518, camera_params=iPhone15ProMainCamera()):
+def project_point(_x, _y, depth, N=518, camera_params=iPhone15ProSquareVideoCamera()):
     """
     Projects a 2D point into 3D space using depth information and camera parameters.
 
@@ -278,7 +323,7 @@ def get_matches(inputs: list[np.ndarray], model: Matching, num_matches: int = 30
             matches.append(postprocess_matches(pred=pred, num_matches=num_matches))
     return matches
 
-def project_matches_to_3d(matches, depths):
+def project_matches_to_3d(matches, depths, camera_params=iPhone15ProSquareVideoCamera()):
     """
     Projects 2D matches to 3D coordinates using depth information.
 
@@ -291,8 +336,8 @@ def project_matches_to_3d(matches, depths):
     """
     matches_3d = []
     for i, (pts0, pts1, _) in enumerate(matches):
-        pts0_3d = np.array([project_point(a,b, depths[i]) for a,b in pts0])
-        pts1_3d = np.array([project_point(a,b, depths[i+1]) for a,b in pts1])
+        pts0_3d = np.array([project_point(a,b, depths[i], camera_params=camera_params) for a,b in pts0])
+        pts1_3d = np.array([project_point(a,b, depths[i+1], camera_params=camera_params) for a,b in pts1])
         matches_3d.append((pts0_3d, pts1_3d))
     return matches_3d
 
@@ -393,8 +438,8 @@ def compute_positions(transforms: list[tuple[np.ndarray, np.ndarray]]):
         positions.append(positions[-1] + t[1])
     return np.array(positions)
 
-def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
-    ray_direction_vectors = [get_rays()]
+def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]], camera_params=iPhone15ProSquareVideoCamera()):
+    ray_direction_vectors = [get_rays(camera_params=camera_params)]
     for t in transforms:
         ray_direction_vectors.append(np.dot(ray_direction_vectors[-1], t[0].T))
     return np.array(ray_direction_vectors)
@@ -408,7 +453,7 @@ def compute_ray_directions(transforms: list[tuple[np.ndarray, np.ndarray]]):
 # -----------------------------------------------------------------------------------------
 # ----------------------------------- MAIN PREPROCESSORS -----------------------------------
 
-def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: Matching, force_reload=False):
+def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: Matching, camera_params=iPhone15ProSquareVideoCamera(), force_reload=False):
     """
     Preprocesses the training data for the given image prefix.
 
@@ -436,10 +481,10 @@ def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: M
     depth_inputs = [preprocess_image_depth(x) for x in images]
     depths = [get_depth(image=x, model=model) for x in depth_inputs]
     matches = get_matches(inputs=match_inputs, model=matching, num_matches=-1)
-    matches_3d = project_matches_to_3d(matches, depths)
+    matches_3d = project_matches_to_3d(matches, depths, camera_params=camera_params)
     transforms = [get_transform(m[0], m[1]) for m in matches_3d]
     positions = compute_positions(transforms)
-    ray_direction_vectors = compute_ray_directions(transforms)
+    ray_direction_vectors = compute_ray_directions(transforms, camera_params=camera_params)
     colors = np.array([get_colors(x) for x in images])
 
     num_images, _, _ = colors.shape
@@ -451,9 +496,9 @@ def training_preprocessor(image_prefix: str, model: torch.nn.Module, matching: M
     torch.save(data_tensor, data_path)
     return data_tensor
 
-def inference_preprocessor(position: np.ndarray, direction: np.ndarray):
+def inference_preprocessor(position: np.ndarray, direction: np.ndarray, camera_params=iPhone15ProSquareVideoCamera()):
     R = compute_rotation_matrix(np.array([0,0,1]), direction)
-    rays = np.dot(get_rays(), R.T)
+    rays = np.dot(get_rays(camera_params=camera_params), R.T)
     positions = np.repeat(np.array([position]), RESOLUTION, axis=0)
     data = np.concatenate((positions, rays), axis=1)
     data_tensor = torch.tensor(data, dtype=torch.float32)
