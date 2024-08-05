@@ -2,7 +2,6 @@ import torch
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import matplotlib
 from glob import glob
 from depth_anything_v2 import dpt
@@ -609,7 +608,7 @@ def visualize_rays(data_tensor):
     positions = data_tensor[:, :3]
     ray_directions = data_tensor[:, 3:6]
 
-    colors = list(mcolors.CSS4_COLORS.values())[:len(positions)]
+    colors = list(matplotlib.colors.CSS4_COLORS.values())[:len(positions)]
 
     fig = go.Figure()
     for i in range(0, len(positions), 400):
@@ -648,8 +647,9 @@ def visualize_camera_poses(data):
 
     fig = go.Figure()
     positions = df['pos'].unique()
-    colors = list(mcolors.CSS4_COLORS.values())[65:][:len(positions)]
+    jet = matplotlib.cm.get_cmap('jet', len(positions))
     for i, pos in enumerate(positions):
+        color = matplotlib.colors.rgb2hex(jet(i)) 
         for dir in df[df['pos'] == pos]['dir'][::5000]:
             try:
                 trace = go.Scatter3d(
@@ -657,7 +657,7 @@ def visualize_camera_poses(data):
                     y=[pos[1], pos[1] + dir[1]],
                     z=[pos[2], pos[2] + dir[2]],
                     mode='lines',
-                    line=dict(color=colors[i], width=1)
+                    line=dict(color=color, width=1)
                 )
 
                 fig.add_trace(trace)
