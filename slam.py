@@ -55,20 +55,7 @@ def get_models():
     model = dpt.DepthAnythingV2(**{**model_configs[encoder], 'max_depth': max_depth})
     model.load_state_dict(torch.load(f'./models/depth_anything_v2_metric_{dataset}_{encoder}.pth', map_location='cpu'))
 
-    config = {
-        'superpoint': {
-            'nms_radius': 4,
-            'keypoint_threshold': 0.005,
-            'max_keypoints': 1024
-        },
-        'superglue': {
-            'weights': 'indoor',
-            'sinkhorn_iterations': 20,
-            'match_threshold': 0.2,
-        }
-    }
-
-    matching = Matching(config).eval().to(torch.device('cpu'))
+    matching = Matching().eval().to(torch.device('cpu'))
 
     return model, matching
 
@@ -319,7 +306,7 @@ def get_matches(inputs: list[np.ndarray], model: Matching, num_matches: int = 30
     matches = []
     for i in range(len(inputs) - 1):
         with torch.no_grad():
-            pred = model({'image0': inputs[i], 'image1': inputs[i+1]})
+            pred = model(img0=inputs[i], img1=inputs[i+1])
             matches.append(postprocess_matches(pred=pred, num_matches=num_matches))
     return matches
 

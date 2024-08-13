@@ -48,12 +48,14 @@ from .superglue import SuperGlue
 
 class Matching(torch.nn.Module):
     """ Image Matching Frontend (SuperPoint + SuperGlue) """
-    def __init__(self, config={}):
+    def __init__(self):
         super().__init__()
-        self.superpoint = SuperPoint(config.get('superpoint', {}))
-        self.superglue = SuperGlue(config.get('superglue', {}))
+        self.superpoint = SuperPoint()
+        self.superpoint.load_state_dict(torch.load('./models/superpoint_v1.pth'))
+        self.superglue = SuperGlue()
+        self.superglue.load_state_dict(torch.load('./models/superglue_indoor.pth'))
 
-    def forward(self, data):
+    def forward(self, img0, img1):
         """ Run SuperPoint (optionally) and SuperGlue
         SuperPoint is skipped if ['keypoints0', 'keypoints1'] exist in input
         Args:
@@ -62,23 +64,24 @@ class Matching(torch.nn.Module):
         pred = {}
 
         # Extract SuperPoint (keypoints, scores, descriptors) if not provided
-        if 'keypoints0' not in data:
-            pred0 = self.superpoint({'image': data['image0']})
-            pred = {**pred, **{k+'0': v for k, v in pred0.items()}}
-        if 'keypoints1' not in data:
-            pred1 = self.superpoint({'image': data['image1']})
-            pred = {**pred, **{k+'1': v for k, v in pred1.items()}}
+        kpts0, scores0, desc0 = self.superpoint(img0)
+        kpts1, scores1, desc1 = self.superpoint(img1)
 
-        # Batch all features
-        # We should either have i) one image per batch, or
-        # ii) the same number of local features for all images in the batch.
-        data = {**data, **pred}
+        idx0, idx1, mscores0, mscores1 = self.superglue(
+            img0=img0, 
+            img1=img1,
+            kpts0=kpts0,
+            kpts1=kpts1,
+            desc0=desc0,
+            desc1=desc1,
+            scores0=scores0,
+            scores1=scores1,
+        )
 
-        for k in data:
-            if isinstance(data[k], (list, tuple)):
-                data[k] = torch.stack(data[k])
-
-        # Perform the matching
-        pred = {**pred, **self.superglue(data)}
-
+        pred['keypoints0'] = kpts0
+        pred['keypoints1'] = kpts1
+        pred['matching_scores0'] = mscores0
+        pred['matches0'] = idx0
         return pred
+
+       

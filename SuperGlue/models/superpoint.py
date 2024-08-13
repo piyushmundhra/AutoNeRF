@@ -71,8 +71,6 @@ def remove_borders(keypoints, scores, border: int, height: int, width: int):
 
 
 def top_k_keypoints(keypoints, scores, k: int):
-    if k >= len(keypoints):
-        return keypoints, scores
     scores, indices = torch.topk(scores, k, dim=0)
     return keypoints[indices], scores
 
@@ -100,52 +98,29 @@ class SuperPoint(nn.Module):
     Rabinovich. In CVPRW, 2019. https://arxiv.org/abs/1712.07629
 
     """
-    default_config = {
-        'descriptor_dim': 256,
-        'nms_radius': 4,
-        'keypoint_threshold': 0.005,
-        'max_keypoints': -1,
-        'remove_borders': 4,
-    }
 
-    def __init__(self, config):
+    def __init__(self):
         super().__init__()
-        self.config = {**self.default_config, **config}
 
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = nn.ReLU()
         self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
-        c1, c2, c3, c4, c5 = 64, 64, 128, 128, 256
+        self.conv1a = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
+        self.conv1b = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv2a = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv2b = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv3a = nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1)
+        self.conv3b = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.conv4a = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.conv4b = nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1)
+        self.convPa = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.convPb = nn.Conv2d(256, 65, kernel_size=1, stride=1, padding=0)
+        self.convDa = nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1)
+        self.convDb = nn.Conv2d(256, 256, kernel_size=1, stride=1, padding=0)
 
-        self.conv1a = nn.Conv2d(1, c1, kernel_size=3, stride=1, padding=1)
-        self.conv1b = nn.Conv2d(c1, c1, kernel_size=3, stride=1, padding=1)
-        self.conv2a = nn.Conv2d(c1, c2, kernel_size=3, stride=1, padding=1)
-        self.conv2b = nn.Conv2d(c2, c2, kernel_size=3, stride=1, padding=1)
-        self.conv3a = nn.Conv2d(c2, c3, kernel_size=3, stride=1, padding=1)
-        self.conv3b = nn.Conv2d(c3, c3, kernel_size=3, stride=1, padding=1)
-        self.conv4a = nn.Conv2d(c3, c4, kernel_size=3, stride=1, padding=1)
-        self.conv4b = nn.Conv2d(c4, c4, kernel_size=3, stride=1, padding=1)
-
-        self.convPa = nn.Conv2d(c4, c5, kernel_size=3, stride=1, padding=1)
-        self.convPb = nn.Conv2d(c5, 65, kernel_size=1, stride=1, padding=0)
-
-        self.convDa = nn.Conv2d(c4, c5, kernel_size=3, stride=1, padding=1)
-        self.convDb = nn.Conv2d(
-            c5, self.config['descriptor_dim'],
-            kernel_size=1, stride=1, padding=0)
-
-        path = Path(__file__).parent / 'weights/superpoint_v1.pth'
-        self.load_state_dict(torch.load(str(path)))
-
-        mk = self.config['max_keypoints']
-        if mk == 0 or mk < -1:
-            raise ValueError('\"max_keypoints\" must be positive or \"-1\"')
-
-        print('Loaded SuperPoint model')
-
-    def forward(self, data):
+    def forward(self, x):
         """ Compute keypoints, scores, descriptors for image """
         # Shared Encoder
-        x = self.relu(self.conv1a(data['image']))
+        x = self.relu(self.conv1a(x))
         x = self.relu(self.conv1b(x))
         x = self.pool(x)
         x = self.relu(self.conv2a(x))
@@ -164,24 +139,23 @@ class SuperPoint(nn.Module):
         b, _, h, w = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, 8, 8)
         scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
-        scores = simple_nms(scores, self.config['nms_radius'])
+        scores = simple_nms(scores, 4)
 
         # Extract keypoints
         keypoints = [
-            torch.nonzero(s > self.config['keypoint_threshold'])
+            torch.nonzero(s > 0.005)
             for s in scores]
         scores = [s[tuple(k.t())] for s, k in zip(scores, keypoints)]
 
         # Discard keypoints near the image borders
         keypoints, scores = list(zip(*[
-            remove_borders(k, s, self.config['remove_borders'], h*8, w*8)
+            remove_borders(k, s, 4, h*8, w*8)
             for k, s in zip(keypoints, scores)]))
 
         # Keep the k keypoints with highest score
-        if self.config['max_keypoints'] >= 0:
-            keypoints, scores = list(zip(*[
-                top_k_keypoints(k, s, self.config['max_keypoints'])
-                for k, s in zip(keypoints, scores)]))
+        keypoints, scores = list(zip(*[
+            top_k_keypoints(k, s, 100)
+            for k, s in zip(keypoints, scores)]))
 
         # Convert (h, w) to (x, y)
         keypoints = [torch.flip(k, [1]).float() for k in keypoints]
@@ -192,11 +166,6 @@ class SuperPoint(nn.Module):
         descriptors = torch.nn.functional.normalize(descriptors, p=2, dim=1)
 
         # Extract descriptors
-        descriptors = [sample_descriptors(k[None], d[None], 8)[0]
-                       for k, d in zip(keypoints, descriptors)]
+        descriptors = [sample_descriptors(k[None], d[None], 8)[0] for k, d in zip(keypoints, descriptors)]
 
-        return {
-            'keypoints': keypoints,
-            'scores': scores,
-            'descriptors': descriptors,
-        }
+        return torch.stack(keypoints), torch.stack(scores), torch.stack(descriptors)
