@@ -258,7 +258,7 @@ def postprocess_matches(pred: dict, num_matches: int = -1):
     Returns:
         tuple: Filtered and sorted keypoints and matching scores.
     """
-    pred = {k: v[0].cpu().numpy() for k, v in pred.items()}    
+    pred = {k: v[0].cpu().detach().numpy() for k, v in pred.items()}    
     kpts0, kpts1, matches, conf = pred['keypoints0'], pred['keypoints1'], pred['matches0'], pred['matching_scores0']
 
     valid = matches > -1

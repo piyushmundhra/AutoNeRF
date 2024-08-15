@@ -44,13 +44,12 @@ from pathlib import Path
 import torch
 from torch import nn
 
-def simple_nms(scores, nms_radius: int):
+def simple_nms(scores):
     """ Fast Non-maximum suppression to remove nearby points """
-    assert(nms_radius >= 0)
 
     def max_pool(x):
         return torch.nn.functional.max_pool2d(
-            x, kernel_size=nms_radius*2+1, stride=1, padding=nms_radius)
+            x, kernel_size=4*2+1, stride=1, padding=4)
 
     zeros = torch.zeros_like(scores)
     max_mask = scores == max_pool(scores)
@@ -139,7 +138,7 @@ class SuperPoint(nn.Module):
         b, _, h, w = scores.shape
         scores = scores.permute(0, 2, 3, 1).reshape(b, h, w, 8, 8)
         scores = scores.permute(0, 1, 3, 2, 4).reshape(b, h*8, w*8)
-        scores = simple_nms(scores, 4)
+        scores = simple_nms(scores)
 
         # Extract keypoints
         keypoints = [
